@@ -20,12 +20,25 @@ def help (message):
 
 @bot.message_handler()
 def text(message):
-    if message.text.lower() == "начнем рассчет":
-        bot.reply_to(message, "Напишите информацию о чеке в формате: cумма в рублях, имя пользователя совершившего покупу, способ разделения долга. Данные должны быть записаны в строчку без запятых через пробел")
+    if message.text.lower() == "начнем":
+        bot.reply_to(message, "Напишите информацию о чеке в формате: cумма в рублях, имя пользователя совершившего покупу, список должников(через '_'). Данные должны быть записаны в строчку без запятых через пробел")
+        bot.register_next_step_handler(message, bill)
+
+def bill(message):
+    bill1 = message.text.split()
+    bot.reply_to(message, f"получены данные {bill1}")
+    sume = bill1[0]
+    name = bill1[1]
+    spisok = bill1[2].split("_")
+    spisok_message = ", ".join(spisok)
+    bot.send_message(message.chat.id, f"Чек:\n Общаяя сумма: {sume}\n Имя покупающего: {name}\n Должники: {spisok_message} " )
+
+# нужно привести в порядок сообщения, добавить параметр описание и/или нозвание чека.
+# добавить в чек суммц которую должен каждый пользователь
+# добавить редоктирование списка ботом
+# добавить обработку ошибок и исключений
 
 
-# Обработчик текстовых сообщений в процессе
-
-
-
-bot.polling(non_stop= True)
+if __name__ == '__main__':
+    print('Бот запущен!')
+    bot.infinity_polling()
