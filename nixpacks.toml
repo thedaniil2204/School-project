@@ -1,8 +1,9 @@
-[phases.setup]
-nixPkgs = ["python311", "pip"]
 
 [phases.build]
 cmds = ["pip install -r requirements.txt"]
+
+[phases.setup]
+aptPkgs = ["curl"]
 
 [phases.start]
 cmd = "python commands.py"
