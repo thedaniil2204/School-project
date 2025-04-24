@@ -1,112 +1,131 @@
-import telebot
-from dotenv import load_dotenv
 import os
-import sqlite3
-from data_b import create_db, add_check, add_users_to_check, update_check_status, get_check_status, get_check_message, update_check_message, get_users_for_check
+import re
+import logging
+import time
+from dotenv import load_dotenv
+import telebot
+import requests
 
-# Загружаем токен из .env
+import data_b as db  # наш модуль для работы с БД
+
+# ---------- Инициализация ---------- #
 load_dotenv()
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 
-bot = telebot.TeleBot(token=TELEGRAM_TOKEN)
+db.create_db()  # гарантируем, что база данных существует
 
-# Создание базы данных, если она еще не создана
-create_db()
+# Настроим логирование
+logging.basicConfig(level=logging.ERROR)
 
-# Обработчик команды /start
+# ---------- /start и /help ---------- #
 @bot.message_handler(commands=["start"])
-def start(message):
-    bot.send_message(message.chat.id, f"Привет {message.from_user.first_name}")
+def cmd_start(msg):
+    bot.reply_to(msg, f"Привет, {msg.from_user.first_name}! 👋")
 
-# Обработчик команды /help
+
 @bot.message_handler(commands=["help"])
-def help(message):
-    bot.send_message(
-        message.chat.id,
-        "Для того чтобы начать работу с ботом, вам необходимо добавить его в чат в качестве администратора."
+def cmd_help(msg):
+    bot.reply_to(
+        msg,
+        "➊ Добавь бота в групповой чат как администратора.\n"
+        "➋ Используй /create_check, чтобы поделить чек.\n"
+        "➌ Пиши &laquo;оплатил твой_ник &raquo;, когда перевёл деньги."
     )
 
-# Обработчик команды /create_check
+# ---------- /create_check ---------- #
 @bot.message_handler(commands=["create_check"])
-def create_check_handler(message):
-    bot.reply_to(message, "Введите сумму чека, имя покупателя и список должников через пробел.")
-    bot.register_next_step_handler(message, create_check)
+def cmd_create_check(msg):
+    bot.reply_to(
+        msg,
+        "Введите: сумма имя_покупателя должник1 должник2 ..."
+    )
+    bot.register_next_step_handler(msg, _create_check_step)
 
-# Обработчик для создания чека
-def create_check(message):
-    bill_data = message.text.split()
 
-    try:
-        total_amount = float(bill_data[0])  # Сумма чека
-    except ValueError:
-        bot.reply_to(message, "Сумма должна быть числом.")
+def _create_check_step(msg):
+    parts = msg.text.split()
+    if len(parts) < 3:
+        bot.reply_to(msg, "Нужно минимум 3 слова: сумма, покупатель, должники.")
         return
 
-    creator_name = bill_data[1]  # Имя покупателя
-    users = bill_data[2:]  # Список должников
+    try:
+        total = float(parts[0])
+    except ValueError:
+        bot.reply_to(msg, "Сумма должна быть числом.")
+        return
 
-    # Создаем чек в БД
-    check_id = add_check(message.chat.id, "открыт", "Чек на покупки", message.from_user.id, total_amount)
+    buyer = parts[1]
+    debtors = parts[2:]
+    if not debtors:
+        bot.reply_to(msg, "Укажите хотя бы одного должника.")
+        return
 
-    # Добавляем пользователей в таблицу check_users и их долги
-    users_debts = {user: round(total_amount / len(users), 2) for user in users}
-    add_users_to_check(check_id, users_debts)
+    per_person = round(total / len(debtors), 2)
+    users_debts = {u: per_person for u in debtors}
 
-    # Формируем сообщение о чеке
-    spisok_message = []
-    for user, debt in users_debts.items():
-        spisok_message.append(f"{user} должен - {debt}")
+    check_id = db.add_check(msg.chat.id, "Чек на покупки", msg.from_user.id, total)
+    db.add_users_to_check(check_id, users_debts)
 
-    spisok_message = "\n".join(spisok_message)
-    sent_message = bot.send_message(
-        message.chat.id,
-        f"Чек:\n"
-        f"Общая сумма: {total_amount}\n"
-        f"Имя покупающего: {creator_name}\n"
-        f"Должники:\n{spisok_message}"
-    )
+    text = db.build_check_text(check_id, buyer, total)
+    sent = bot.send_message(msg.chat.id, text)
+    db.save_check_message_id(check_id, sent.message_id)
+    bot.pin_chat_message(msg.chat.id, sent.message_id)
 
-    # Запоминаем ID сообщения чека для дальнейших обновлений
-    update_check_message(check_id, sent_message.message_id)
 
-    bot.pin_chat_message(chat_id=message.chat.id, message_id=sent_message.message_id)
+# ---------- Оплата ---------- #
+@bot.message_handler(
+    func=lambda m: bool(re.search(r"\bоплатил\b", m.text, flags=re.IGNORECASE))
+)
+def handle_payment(msg):
+    tokens = msg.text.strip().split()
+    if len(tokens) < 2:
+        bot.reply_to(msg, "Формат: &laquo;оплатил ник &raquo;.")
+        return
 
-# Обработчик для команд типа "оплатил"
-@bot.message_handler(func=lambda message: "оплатил" in message.text.lower())
-def handle_payment(message):
-    username = message.text.split()[0]  # Получаем username из сообщения
+    user_name = tokens[1]
+    record = db.get_user_record(user_name)
+    if not record:
+        bot.reply_to(msg, "Должник не найден или уже всё оплатил.")
+        return
 
-    # Получаем список пользователей чека из базы данных
-    users_for_check = get_users_for_check(username)  # Функция, которая получает всех пользователей для чека
+    check_id = record["check_id"]
 
-    if users_for_check:
-        # Проверяем статус чека в базе данных
-        check_id = users_for_check[0]['check_id']  # Извлекаем ID чека из списка пользователей
-        check_status = get_check_status(check_id)
+    # Обновляем пользователя
+    db.update_user_status(check_id, user_name, "оплатил")
+    db.close_check_if_paid(check_id)
 
-        if check_status == "закрыт":
-            bot.reply_to(message, "Чек уже закрыт.")
-            return
+    # Получаем данные для обновления сообщения
+    buyer_name = ""  # Можно использовать поле из базы, если нужно
+    total_amount = record["debt"] * len(db.list_users_for_check(check_id))
+    new_text = db.build_check_text(check_id, buyer_name, total_amount)
+    message_id = db.get_check_message_id(check_id)
 
-        # Обновляем статус пользователя как оплатившего
-        update_check_status(check_id, "оплатил")
+    if message_id:
+        safe_edit_message(msg.chat.id, message_id, new_text)
 
-        # Получаем обновленную информацию о чеке
-        updated_message = get_check_message(check_id)
+    bot.reply_to(msg, f"Отлично! {user_name} отмечен как оплативший.")
 
-        bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=check_id,
-            text=updated_message.strip()
-        )
-        bot.reply_to(message, f"Статус пользователя {username} обновлен.")
-    else:
-        bot.reply_to(message, "Этот пользователь не найден в списке должников.")
 
-# Запуск бота
-if __name__ == '__main__':
-    print('Бот запущен!')
+# ---------- Безопасное редактирование сообщений ---------- #
+def safe_edit_message(chat_id, message_id, new_text):
+    try:
+        bot.edit_message_text(new_text, chat_id=chat_id, message_id=message_id)
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Failed to edit message {message_id} in chat {chat_id}: {e}")
+        # Можно добавить повторную попытку через несколько секунд
+        time.sleep(5)
+        try:
+            bot.edit_message_text(new_text, chat_id=chat_id, message_id=message_id)
+        except requests.exceptions.RequestException as retry_error:
+            logging.error(f"Retry failed for message {message_id} in chat {chat_id}: {retry_error}")
+
+
+# ---------- Запуск ---------- #
+if __name__ == "__main__":
+    print("Бот запущен 🚀")
     bot.infinity_polling()
+
 
 
 
