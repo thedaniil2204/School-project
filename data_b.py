@@ -180,6 +180,29 @@ def build_check_text(check_id: int) -> str:
         rows.append(f"– {user_id}: {debt} {suffix}")
     return "\n".join([r for r in rows if r])
 
+# --- Агрегированные долги по парам &laquo;должник-покупатель&raquo; ------------------
+def list_open_debts(chat_id: int) -> list[tuple[str, str, float]]:
+    """Все НЕоплаченные долги (должник, покупатель, сумма) для открытых чеков."""
+    with closing(_connect()) as conn, closing(conn.cursor()) as cur:
+        cur.execute("""
+        SELECT cu.user_id, c.buyer_name, cu.debt
+        FROM check_users cu
+        JOIN checks c ON c.check_id = cu.check_id
+        WHERE c.chat_id = ?
+          AND c.status != 'закрыт'
+          AND c.is_final = 0
+          AND cu.status = 'должен'
+        """, (chat_id,))
+        return cur.fetchall()
+
+
+def aggregate_debts_pairs(chat_id: int) -> dict[tuple[str, str], float]:
+    """Словарь {(debtor, buyer): total_debt} по всем открытым чекам."""
+    pairs: dict[tuple[str, str], float] = {}
+    for debtor, buyer, amt in list_open_debts(chat_id):
+        pairs[(debtor, buyer)] = pairs.get((debtor, buyer), 0) + amt
+    return pairs
+
 create_db()
 
 # def clear_test_data():

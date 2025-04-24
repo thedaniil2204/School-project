@@ -105,16 +105,34 @@ def _create_step(m):
 # ---------- &laquo;посчитай все&raquo; ---------- #
 @bot.message_handler(func=lambda m: m.text and m.text.lower().startswith("посчитай все"))
 def calc_all(m):
-    totals = db.aggregate_debts(m.chat.id)
-    if not totals:
+    # --- агрегируем долги ---
+    totals_by_user = db.aggregate_debts(m.chat.id)          # было раньше
+    pairs          = db.aggregate_debts_pairs(m.chat.id)    # NEW
+
+    if not totals_by_user:
         bot.reply_to(m, "Нет открытых чеков для подсчёта.")
         return
 
-    total_sum = sum(totals.values())
-    check_id = db.add_check(m.chat.id, "Сводный", m.from_user.id, total_sum, is_final=1)
-    db.add_users_to_check(check_id, totals)
+    # --- создаём финальный чек (как и прежде) ---
+    total_sum = sum(totals_by_user.values())
+    check_id = db.add_check(m.chat.id, "Сводный", m.from_user.id,
+                            total_sum, is_final=1)
+    db.add_users_to_check(check_id, totals_by_user)
 
-    text = db.build_check_text(check_id)
+    # --- формируем расширенный текст ---
+    lines = [
+        f"Сводный чек #{check_id}",
+        f"Общая сумма: {total_sum}",
+        "Итого каждому:",
+    ] + [f"– {u}: {round(amt,2)}" for u, amt in totals_by_user.items()] + [
+        "",
+        "Кто кому должен:"
+    ] + [f"– {d} должен {b} {round(amt,2)}"
+         for (d, b), amt in pairs.items()]
+
+    text = "\n".join(lines)
+
+    # --- отправляем и закрепляем ---
     sent = bot.send_message(m.chat.id, text)
     db.save_check_message_id(check_id, sent.message_id)
     bot.pin_chat_message(m.chat.id, sent.message_id)
