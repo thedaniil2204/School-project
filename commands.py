@@ -6,7 +6,19 @@ from dotenv import load_dotenv
 import telebot
 import requests
 import data_b as db
+import os
+import sqlite3
 
+# Получаем путь к базе данных из переменной окружения
+DB_PATH = os.getenv("DB_PATH", "check_db.db")  # Путь из .env или по умолчанию
+
+# Подключаемся к базе данных
+conn = sqlite3.connect(DB_PATH)
+cursor = conn.cursor()
+if not DB_PATH:
+    print("Ошибка: Путь к базе данных не задан в .env!")
+else:
+    print(f"Путь к базе данных: {DB_PATH}")
 
 # ---------- init ---------- #
 load_dotenv()
