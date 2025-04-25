@@ -91,10 +91,20 @@ def get_last_open_check_id(chat_id: int) -> int | None:
         return r[0] if r else None
 
 
-def close_all_checks(chat_id: int) -> None:
+def close_all_checks(chat_id: int) -> list[int]:
+    """
+    Переводит все открытые чеки чата в статус &laquo;закрыт&raquo;
+    и возвращает список их id.
+    """
     with closing(_connect()) as conn, conn, closing(conn.cursor()) as cur:
-        cur.execute("""UPDATE checks SET status = 'закрыт'
-                       WHERE chat_id = ?""", (chat_id,))
+        cur.execute("""SELECT check_id FROM checks
+                       WHERE chat_id = ? AND status != 'закрыт'""", (chat_id,))
+        ids = [row[0] for row in cur.fetchall()]
+
+        if ids:
+            cur.execute(f"""UPDATE checks SET status = 'закрыт'
+                            WHERE check_id IN ({",".join("?"*len(ids))})""", ids)
+        return ids
 
 
 # ---------- пользователи ---------- #
