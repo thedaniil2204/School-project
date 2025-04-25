@@ -8,7 +8,7 @@ import requests
 import data_b as db
 import os
 import sqlite3
-
+# еще обновление .env
 # Получаем путь к базе данных из переменной окружения
 DB_PATH = os.getenv("DB_PATH", "check_db.db")  # Путь из .env или по умолчанию
 
