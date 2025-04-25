@@ -8,14 +8,9 @@ import requests
 import data_b as db
 import os
 import sqlite3
-# еще обновление .env
-# Получаем путь к базе данных из переменной окружения
-DB_PATH = os.getenv("DB_PATH", "/mnt/volume/check_db.db")
-
-
-# Подключаемся к базе данных
+# Получаем путь к базе данных, если он не задан, используем текущую директорию
+DB_PATH = os.getenv("DB_PATH", "/app/check_db.db")
 conn = sqlite3.connect(DB_PATH)
-cursor = conn.cursor()
 if not DB_PATH:
     print("Ошибка: Путь к базе данных не задан в .env!")
 else:
